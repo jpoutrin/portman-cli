@@ -50,9 +50,7 @@ def get_context(path: Path | None = None) -> Context:
 
     hash_value = hashlib.md5(identity.encode()).hexdigest()[:12]
 
-    return Context(
-        hash=hash_value, path=str(path), label=label, remote=remote, branch=branch
-    )
+    return Context(hash=hash_value, path=str(path), label=label, remote=remote, branch=branch)
 
 
 def _get_git_remote(path: Path) -> str | None:

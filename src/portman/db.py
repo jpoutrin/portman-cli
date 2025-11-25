@@ -261,9 +261,7 @@ class Database:
             Number of deleted allocations
         """
         with self._lock, self._get_connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM allocations WHERE context_hash = ?", (context_hash,)
-            )
+            cursor = conn.execute("DELETE FROM allocations WHERE context_hash = ?", (context_hash,))
             conn.commit()
             return cursor.rowcount
 
@@ -316,25 +314,19 @@ class Database:
             PortRange object (returns 'default' range if service not found)
         """
         with self._lock, self._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM port_ranges WHERE service = ?", (service,)
-            )
+            cursor = conn.execute("SELECT * FROM port_ranges WHERE service = ?", (service,))
             row = cursor.fetchone()
 
             if row is None:
                 # Try to find default range
-                cursor = conn.execute(
-                    "SELECT * FROM port_ranges WHERE service = 'default'"
-                )
+                cursor = conn.execute("SELECT * FROM port_ranges WHERE service = 'default'")
                 row = cursor.fetchone()
 
             if row is None:
                 # Fallback hardcoded default
                 return PortRange(service="default", start=10000, end=19999)
 
-            return PortRange(
-                service=row["service"], start=row["range_start"], end=row["range_end"]
-            )
+            return PortRange(service=row["service"], start=row["range_start"], end=row["range_end"])
 
     def set_port_range(self, service: str, start: int, end: int) -> None:
         """Set or update port range for a service.
@@ -364,9 +356,7 @@ class Database:
             List of PortRange objects
         """
         with self._lock, self._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM port_ranges ORDER BY service"
-            )
+            cursor = conn.execute("SELECT * FROM port_ranges ORDER BY service")
             return [
                 PortRange(
                     service=row["service"],

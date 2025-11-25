@@ -30,9 +30,7 @@ def mock_git_repo(temp_dir):
     repo_dir.mkdir()
 
     # Initialize git repo
-    subprocess.run(
-        ["git", "init"], cwd=repo_dir, capture_output=True, check=True
-    )
+    subprocess.run(["git", "init"], cwd=repo_dir, capture_output=True, check=True)
 
     # Add remote
     subprocess.run(
@@ -58,9 +56,7 @@ def mock_git_repo(temp_dir):
 
     # Create initial commit
     (repo_dir / "README.md").write_text("# Test")
-    subprocess.run(
-        ["git", "add", "."], cwd=repo_dir, capture_output=True, check=True
-    )
+    subprocess.run(["git", "add", "."], cwd=repo_dir, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "Initial commit"],
         cwd=repo_dir,

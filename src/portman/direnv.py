@@ -1,16 +1,16 @@
 """Direnv integration helpers for Portman."""
 
-DIRENV_HELPER = '''# Portman helper function for direnv
+DIRENV_HELPER = """# Portman helper function for direnv
 # Add to ~/.config/direnv/direnvrc
 
 use_portman() {
     eval "$(portman export --auto)"
 }
-'''
+"""
 
-ENVRC_TEMPLATE = '''# Portman integration
+ENVRC_TEMPLATE = """# Portman integration
 eval "$(portman export --auto)"
-'''
+"""
 
 
 def generate_envrc_content() -> str:

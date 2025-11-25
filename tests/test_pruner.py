@@ -44,7 +44,7 @@ def test_prune_keeps_valid(mock_db, temp_dir):
 def test_prune_dry_run(mock_db, temp_dir):
     """Test that dry run doesn't actually delete."""
     # Create orphaned allocation
-    alloc_id = mock_db.create_allocation(
+    mock_db.create_allocation(
         context_hash="orphan123",
         context_path="/nonexistent/path",
         context_label="orphan/test",

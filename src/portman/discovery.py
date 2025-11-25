@@ -70,7 +70,7 @@ def _parse_compose_file(file_path: Path) -> list[DiscoveredService]:
     try:
         with open(file_path) as f:
             data = yaml.safe_load(f)
-    except (yaml.YAMLError, IOError):
+    except (OSError, yaml.YAMLError):
         return services
 
     if not data or "services" not in data:

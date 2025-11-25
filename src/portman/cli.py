@@ -1,15 +1,13 @@
 """Typer CLI for Portman."""
 
 import json
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from .allocator import PortAllocator, PortAllocationError
+from .allocator import PortAllocationError, PortAllocator
 from .context import get_context
 from .db import Database
 from .direnv import generate_direnvrc_helper, generate_envrc_content
@@ -23,6 +21,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+error_console = Console(stderr=True)
 
 
 def get_db() -> Database:
@@ -39,9 +38,7 @@ def get_db() -> Database:
 def get(
     service: str = typer.Argument(..., help="Service name (e.g., postgres, redis)"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Output only the port number"),
-    book: bool = typer.Option(
-        True, "--book/--no-book", help="Auto-book if not allocated"
-    ),
+    book: bool = typer.Option(True, "--book/--no-book", help="Auto-book if not allocated"),
 ) -> None:
     """Get the port for a service in current context.
 
@@ -78,12 +75,11 @@ def get(
                 source="manual",
             )
         except PortAllocationError as e:
-            console.print(f"[red]Error:[/red] {e}", file=sys.stderr)
+            error_console.print(f"[red]Error:[/red] {e}")
             raise typer.Exit(1)
     else:
-        console.print(
-            f"[yellow]No port allocated for '{service}' in current context[/yellow]",
-            file=sys.stderr,
+        error_console.print(
+            f"[yellow]No port allocated for '{service}' in current context[/yellow]"
         )
         raise typer.Exit(1)
 
@@ -95,11 +91,9 @@ def get(
 
 @app.command()
 def book(
-    service: Optional[str] = typer.Argument(None, help="Service name to book"),
-    port: Optional[int] = typer.Option(None, "-p", "--port", help="Preferred port"),
-    auto: bool = typer.Option(
-        False, "--auto", help="Auto-discover from docker-compose.yml"
-    ),
+    service: str | None = typer.Argument(None, help="Service name to book"),
+    port: int | None = typer.Option(None, "-p", "--port", help="Preferred port"),
+    auto: bool = typer.Option(False, "--auto", help="Auto-discover from docker-compose.yml"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Minimal output"),
 ) -> None:
     """Book port(s) for service(s) in current context.
@@ -117,9 +111,7 @@ def book(
         # Auto-discover from docker-compose
         services = discover_services()
         if not services:
-            console.print(
-                "[yellow]No services discovered from docker-compose.yml[/yellow]"
-            )
+            console.print("[yellow]No services discovered from docker-compose.yml[/yellow]")
             return
 
         for svc in services:
@@ -127,9 +119,7 @@ def book(
             existing = db.get_allocation(ctx.hash, svc.name)
             if existing:
                 if not quiet:
-                    console.print(
-                        f"[dim]{svc.name}: {existing['port']} (already allocated)[/dim]"
-                    )
+                    console.print(f"[dim]{svc.name}: {existing['port']} (already allocated)[/dim]")
                 continue
 
             # Allocate port
@@ -156,9 +146,7 @@ def book(
         # Book specific service
         existing = db.get_allocation(ctx.hash, service)
         if existing:
-            console.print(
-                f"[yellow]{service} already allocated:[/yellow] {existing['port']}"
-            )
+            console.print(f"[yellow]{service} already allocated:[/yellow] {existing['port']}")
             return
 
         service_type = infer_service_type(service)
@@ -186,7 +174,7 @@ def book(
 
 @app.command()
 def release(
-    service: Optional[str] = typer.Argument(None, help="Service to release"),
+    service: str | None = typer.Argument(None, help="Service to release"),
     all: bool = typer.Option(False, "--all", help="Release all ports for current context"),
 ) -> None:
     """Release port allocation(s) for current context.
@@ -214,12 +202,8 @@ def release(
 
 @app.command(name="export")
 def export_cmd(
-    auto: bool = typer.Option(
-        False, "--auto", help="Auto-discover and book services"
-    ),
-    format: str = typer.Option(
-        "shell", "--format", "-f", help="Output format: shell, json, env"
-    ),
+    auto: bool = typer.Option(False, "--auto", help="Auto-discover and book services"),
+    format: str = typer.Option("shell", "--format", "-f", help="Output format: shell, json, env"),
 ) -> None:
     """Export port allocations as environment variables.
 
@@ -292,12 +276,8 @@ def export_cmd(
 
 @app.command()
 def status(
-    all: bool = typer.Option(
-        False, "-a", "--all", help="Show all contexts, not just current"
-    ),
-    live: bool = typer.Option(
-        False, "--live", help="Check if ports are actually listening"
-    ),
+    all: bool = typer.Option(False, "-a", "--all", help="Show all contexts, not just current"),
+    live: bool = typer.Option(False, "--live", help="Check if ports are actually listening"),
 ) -> None:
     """Show port allocations status.
 
@@ -409,10 +389,8 @@ def discover() -> None:
 
 @app.command()
 def prune(
-    dry_run: bool = typer.Option(
-        False, "--dry-run", "-n", help="Show what would be removed"
-    ),
-    stale_days: Optional[int] = typer.Option(
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would be removed"),
+    stale_days: int | None = typer.Option(
         None, "--stale", help="Also remove allocations not accessed in N days"
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
@@ -444,9 +422,7 @@ def prune(
     # Show what would be removed
     console.print(f"[yellow]Would remove {len(result.removed)} allocation(s):[/yellow]")
     for alloc in result.removed:
-        console.print(
-            f"  - {alloc['context_label']}: {alloc['service']} ({alloc['port']})"
-        )
+        console.print(f"  - {alloc['context_label']}: {alloc['service']} ({alloc['port']})")
 
     if dry_run:
         console.print("\n[dim]Run without --dry-run to remove.[/dim]")
@@ -482,9 +458,7 @@ def gc() -> None:
 @app.command()
 def init(
     shell: bool = typer.Option(False, "--shell", help="Output shell integration snippet"),
-    direnv: bool = typer.Option(
-        False, "--direnv", help="Output direnv integration snippet"
-    ),
+    direnv: bool = typer.Option(False, "--direnv", help="Output direnv integration snippet"),
 ) -> None:
     """Initialize portman and show setup instructions.
 
@@ -508,7 +482,7 @@ def init(
     console.print("   [dim]brew install direnv  # macOS[/dim]")
     console.print("   [dim]apt install direnv   # Debian/Ubuntu[/dim]\n")
     console.print("2. Add to your project's .envrc:")
-    console.print(f'   [green]{generate_envrc_content().strip()}[/green]\n')
+    console.print(f"   [green]{generate_envrc_content().strip()}[/green]\n")
     console.print("3. Allow direnv:")
     console.print("   [dim]direnv allow[/dim]\n")
     console.print("4. Done! Ports will be allocated automatically.\n")
@@ -518,7 +492,7 @@ def init(
 @app.command()
 def config(
     show: bool = typer.Option(False, "--show", help="Show current configuration"),
-    set_range: Optional[str] = typer.Option(
+    set_range: str | None = typer.Option(
         None, "--set-range", help="Set port range: service:start-end"
     ),
 ) -> None:

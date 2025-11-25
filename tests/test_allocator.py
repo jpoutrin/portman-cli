@@ -2,7 +2,7 @@
 
 import pytest
 
-from portman.allocator import PortAllocator, PortAllocationError
+from portman.allocator import PortAllocationError, PortAllocator
 
 
 def test_allocate_new_port(mock_db):

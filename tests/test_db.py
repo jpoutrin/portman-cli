@@ -4,8 +4,6 @@ import sqlite3
 
 import pytest
 
-from portman.db import Database, PortRange
-
 
 def test_db_initialization(mock_db):
     """Test database is properly initialized."""

@@ -18,7 +18,9 @@ class DiscoveredService:
     source: str  # Source file path
 
 
-def discover_services(path: Path | None = None) -> list[DiscoveredService]:
+def discover_services(
+    path: Path | None = None, compose_file: str | None = None
+) -> list[DiscoveredService]:
     """Discover services requiring port allocation from docker-compose files.
 
     Scans for docker-compose.yml files and extracts services that need
@@ -33,6 +35,8 @@ def discover_services(path: Path | None = None) -> list[DiscoveredService]:
 
     Args:
         path: Path to search for docker-compose files. Defaults to cwd.
+        compose_file: Specific compose file to use. If provided, only this file
+                      will be parsed. If not provided, searches for standard names.
 
     Returns:
         List of discovered services
@@ -40,7 +44,16 @@ def discover_services(path: Path | None = None) -> list[DiscoveredService]:
     path = path or Path.cwd()
     services: list[DiscoveredService] = []
 
-    # Search for compose files
+    # If specific compose file provided, use it
+    if compose_file:
+        compose_path = Path(compose_file)
+        if not compose_path.is_absolute():
+            compose_path = path / compose_path
+        if compose_path.exists():
+            services.extend(_parse_compose_file(compose_path))
+        return services
+
+    # Otherwise, search for compose files with standard names
     compose_files = [
         "docker-compose.yml",
         "docker-compose.yaml",

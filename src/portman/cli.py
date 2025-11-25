@@ -94,6 +94,9 @@ def book(
     service: str | None = typer.Argument(None, help="Service name to book"),
     port: int | None = typer.Option(None, "-p", "--port", help="Preferred port"),
     auto: bool = typer.Option(False, "--auto", help="Auto-discover from docker-compose.yml"),
+    compose_file: str | None = typer.Option(
+        None, "--compose-file", "-f", help="Path to docker-compose file"
+    ),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Minimal output"),
 ) -> None:
     """Book port(s) for service(s) in current context.
@@ -102,6 +105,7 @@ def book(
         portman book postgres
         portman book postgres --port 5433
         portman book --auto
+        portman book --auto --compose-file docker-compose.prod.yml
     """
     db = get_db()
     ctx = get_context()
@@ -109,7 +113,7 @@ def book(
 
     if auto:
         # Auto-discover from docker-compose
-        services = discover_services()
+        services = discover_services(compose_file=compose_file)
         if not services:
             console.print("[yellow]No services discovered from docker-compose.yml[/yellow]")
             return
@@ -203,7 +207,10 @@ def release(
 @app.command(name="export")
 def export_cmd(
     auto: bool = typer.Option(False, "--auto", help="Auto-discover and book services"),
-    format: str = typer.Option("shell", "--format", "-f", help="Output format: shell, json, env"),
+    compose_file: str | None = typer.Option(
+        None, "--compose-file", help="Path to docker-compose file"
+    ),
+    format: str = typer.Option("shell", "--format", help="Output format: shell, json, env"),
 ) -> None:
     """Export port allocations as environment variables.
 
@@ -213,6 +220,7 @@ def export_cmd(
     Examples:
         portman export
         portman export --auto
+        portman export --auto --compose-file docker-compose.prod.yml
         portman export --format json
     """
     db = get_db()
@@ -221,7 +229,7 @@ def export_cmd(
     # Auto-book if requested
     if auto:
         allocator = PortAllocator(db)
-        services = discover_services()
+        services = discover_services(compose_file=compose_file)
 
         for svc in services:
             existing = db.get_allocation(ctx.hash, svc.name)
@@ -354,12 +362,20 @@ def context() -> None:
 
 
 @app.command()
-def discover() -> None:
+def discover(
+    compose_file: str | None = typer.Option(
+        None, "--compose-file", "-f", help="Path to docker-compose file"
+    ),
+) -> None:
     """Discover services from docker-compose.yml without booking.
 
     Shows what services would be booked with `portman book --auto`.
+
+    Examples:
+        portman discover
+        portman discover --compose-file docker-compose.prod.yml
     """
-    services = discover_services()
+    services = discover_services(compose_file=compose_file)
 
     if not services:
         console.print("[yellow]No services discovered from docker-compose.yml[/yellow]")

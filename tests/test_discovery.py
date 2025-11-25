@@ -141,3 +141,72 @@ services:
 
     assert len(services) == 1
     assert services[0].name == "postgres"
+
+
+def test_discover_services_with_custom_compose_file(temp_dir):
+    """Test discovering services from a custom compose file."""
+    # Create a custom compose file
+    compose_content = """
+version: '3.8'
+services:
+  postgres:
+    image: postgres:14
+    ports:
+      - "${PG_PORT}:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379"
+"""
+    custom_path = temp_dir / "docker-compose.prod.yml"
+    custom_path.write_text(compose_content)
+
+    # Also create a standard compose file (should be ignored)
+    standard_content = """
+version: '3.8'
+services:
+  mongodb:
+    image: mongo:5
+    ports:
+      - "27017"
+"""
+    standard_path = temp_dir / "docker-compose.yml"
+    standard_path.write_text(standard_content)
+
+    # Discover with custom file - should only find postgres and redis
+    services = discover_services(temp_dir, compose_file="docker-compose.prod.yml")
+
+    assert len(services) == 2
+    service_names = {s.name for s in services}
+    assert service_names == {"postgres", "redis"}
+
+    # Verify standard file is ignored
+    assert "mongodb" not in service_names
+
+
+def test_discover_services_with_absolute_compose_file(temp_dir):
+    """Test discovering services with an absolute path to compose file."""
+    compose_content = """
+version: '3.8'
+services:
+  postgres:
+    image: postgres:14
+    ports:
+      - "${PG_PORT}:5432"
+"""
+    compose_path = temp_dir / "custom-compose.yml"
+    compose_path.write_text(compose_content)
+
+    # Use absolute path
+    services = discover_services(compose_file=str(compose_path))
+
+    assert len(services) == 1
+    assert services[0].name == "postgres"
+
+
+def test_discover_services_with_nonexistent_compose_file(temp_dir):
+    """Test discovering services with nonexistent custom compose file."""
+    services = discover_services(temp_dir, compose_file="nonexistent.yml")
+
+    assert len(services) == 0

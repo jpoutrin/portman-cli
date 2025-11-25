@@ -155,6 +155,7 @@ class Database:
                 ),
             )
             conn.commit()
+            assert cursor.lastrowid is not None, "Failed to create allocation"
             return cursor.lastrowid
 
     def get_allocation(self, context_hash: str, service: str) -> dict[str, Any] | None:

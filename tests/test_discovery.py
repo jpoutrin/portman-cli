@@ -1,6 +1,5 @@
 """Tests for discovery module."""
 
-from pathlib import Path
 
 from portman.discovery import (
     _parse_port_definition,

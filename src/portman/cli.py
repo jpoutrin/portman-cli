@@ -1,15 +1,13 @@
 """Typer CLI for Portman."""
 
 import json
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from .allocator import PortAllocator, PortAllocationError
+from .allocator import PortAllocationError, PortAllocator
 from .context import get_context
 from .db import Database
 from .direnv import generate_direnvrc_helper, generate_envrc_content
@@ -23,6 +21,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+error_console = Console(stderr=True)
 
 
 def get_db() -> Database:
@@ -78,12 +77,11 @@ def get(
                 source="manual",
             )
         except PortAllocationError as e:
-            console.print(f"[red]Error:[/red] {e}", file=sys.stderr)
+            error_console.print(f"[red]Error:[/red] {e}")
             raise typer.Exit(1)
     else:
-        console.print(
-            f"[yellow]No port allocated for '{service}' in current context[/yellow]",
-            file=sys.stderr,
+        error_console.print(
+            f"[yellow]No port allocated for '{service}' in current context[/yellow]"
         )
         raise typer.Exit(1)
 
@@ -95,8 +93,8 @@ def get(
 
 @app.command()
 def book(
-    service: Optional[str] = typer.Argument(None, help="Service name to book"),
-    port: Optional[int] = typer.Option(None, "-p", "--port", help="Preferred port"),
+    service: str | None = typer.Argument(None, help="Service name to book"),
+    port: int | None = typer.Option(None, "-p", "--port", help="Preferred port"),
     auto: bool = typer.Option(
         False, "--auto", help="Auto-discover from docker-compose.yml"
     ),
@@ -186,7 +184,7 @@ def book(
 
 @app.command()
 def release(
-    service: Optional[str] = typer.Argument(None, help="Service to release"),
+    service: str | None = typer.Argument(None, help="Service to release"),
     all: bool = typer.Option(False, "--all", help="Release all ports for current context"),
 ) -> None:
     """Release port allocation(s) for current context.
@@ -412,7 +410,7 @@ def prune(
     dry_run: bool = typer.Option(
         False, "--dry-run", "-n", help="Show what would be removed"
     ),
-    stale_days: Optional[int] = typer.Option(
+    stale_days: int | None = typer.Option(
         None, "--stale", help="Also remove allocations not accessed in N days"
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
@@ -518,7 +516,7 @@ def init(
 @app.command()
 def config(
     show: bool = typer.Option(False, "--show", help="Show current configuration"),
-    set_range: Optional[str] = typer.Option(
+    set_range: str | None = typer.Option(
         None, "--set-range", help="Set port range: service:start-end"
     ),
 ) -> None:

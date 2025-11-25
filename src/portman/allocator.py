@@ -1,5 +1,7 @@
 """Port allocation logic for Portman."""
 
+from typing import cast
+
 from .db import Database
 from .system import SystemScanner
 
@@ -52,7 +54,7 @@ class PortAllocator:
         if existing:
             # Update last accessed timestamp
             self.db.touch_allocation(existing["id"])
-            return existing["port"]
+            return cast(int, existing["port"])
 
         # 2. Collect unavailable ports
         unavailable = self._get_unavailable_ports()

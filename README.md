@@ -70,6 +70,12 @@ portman book --auto
 
 This scans your `docker-compose.yml` and allocates ports for each service.
 
+For custom compose file names:
+
+```bash
+portman book --auto --compose-file docker-compose.prod.yml
+```
+
 ### 3. direnv Integration (Recommended)
 
 Add to your `.envrc`:
@@ -136,6 +142,29 @@ Then in your `.envrc`:
 ```bash
 eval "$(portman export --auto)"
 ```
+
+For custom compose files:
+
+```bash
+eval "$(portman export --auto --compose-file docker-compose.prod.yml)"
+```
+
+### Working with Multiple Compose Files
+
+If your project uses different compose files for different environments:
+
+```bash
+# Development environment
+portman book --auto --compose-file docker-compose.dev.yml
+
+# Production environment
+portman book --auto --compose-file docker-compose.prod.yml
+
+# Staging environment
+portman book --auto --compose-file compose.staging.yaml
+```
+
+The `--compose-file` option works with both relative and absolute paths.
 
 ### Manual Port Allocation
 
@@ -208,6 +237,10 @@ portman book <service> --port <port>
 
 # Auto-discover from docker-compose.yml
 portman book --auto
+
+# Auto-discover from custom compose file
+portman book --auto --compose-file docker-compose.prod.yml
+portman book --auto -f compose.staging.yaml
 ```
 
 ### `portman get`
@@ -231,6 +264,9 @@ portman export postgres redis
 
 # Auto-discover from docker-compose.yml
 portman export --auto
+
+# Auto-discover from custom compose file
+portman export --auto --compose-file docker-compose.prod.yml
 
 # With custom format
 portman export postgres --format "POSTGRES_URL=postgresql://localhost:{port}/db"
@@ -312,6 +348,21 @@ Show system information and diagnostics.
 ```bash
 portman status
 ```
+
+### `portman discover`
+
+Discover services from docker-compose files without booking them.
+
+```bash
+# Discover from standard compose files
+portman discover
+
+# Discover from custom compose file
+portman discover --compose-file docker-compose.prod.yml
+portman discover -f compose.staging.yaml
+```
+
+Shows what services would be booked with `portman book --auto`.
 
 ## How It Works
 

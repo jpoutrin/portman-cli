@@ -41,16 +41,26 @@ def discover_services(
     Returns:
         List of discovered services
     """
+    from .console import debug
+
     path = path or Path.cwd()
     services: list[DiscoveredService] = []
+
+    debug(f"discover_services(path={path}, compose_file={compose_file!r})")
 
     # If specific compose file provided, use it
     if compose_file:
         compose_path = Path(compose_file)
+        debug(f"  Initial compose_path: {compose_path}")
         if not compose_path.is_absolute():
             compose_path = path / compose_path
+            debug(f"  Made absolute: {compose_path}")
+        debug(f"  File exists: {compose_path.exists()}")
         if compose_path.exists():
+            debug(f"  Parsing file: {compose_path}")
             services.extend(_parse_compose_file(compose_path))
+        else:
+            debug(f"  File does not exist: {compose_path}")
         return services
 
     # Otherwise, search for compose files with standard names
@@ -124,8 +134,11 @@ def _parse_port_definition(
         target = port_def.get("target")
 
         if isinstance(published, str) and published.startswith("$"):
-            # Environment variable
+            # Environment variable - handle ${VAR:-default} format
             env_var = published.lstrip("${").rstrip("}")
+            # Remove default value if present (e.g., "VAR:-5432" -> "VAR")
+            if ":-" in env_var:
+                env_var = env_var.split(":-")[0]
             return DiscoveredService(
                 name=service_name,
                 container_port=int(target) if target else 0,
@@ -138,8 +151,8 @@ def _parse_port_definition(
     # String format
     port_str = str(port_def)
 
-    # Variable format: ${VAR}:5432 or $VAR:5432
-    var_match = re.match(r"^\$\{?(\w+)\}?:(\d+)(?:/\w+)?$", port_str)
+    # Variable format: ${VAR}:5432 or $VAR:5432 or ${VAR:-default}:5432
+    var_match = re.match(r"^\$\{?(\w+)(?::-[^}]+)?\}?:(\d+)(?:/\w+)?$", port_str)
     if var_match:
         return DiscoveredService(
             name=service_name,

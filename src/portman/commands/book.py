@@ -42,9 +42,7 @@ def book(
             existing = db.get_allocation(ctx.hash, svc.name)
             if existing:
                 if not quiet:
-                    console.print(
-                        f"[dim]{svc.name}: {existing['port']} (already allocated)[/dim]"
-                    )
+                    console.print(f"[dim]{svc.name}: {existing['port']} (already allocated)[/dim]")
                 continue
 
             # Allocate port
@@ -71,9 +69,7 @@ def book(
         # Book specific service
         existing = db.get_allocation(ctx.hash, service)
         if existing:
-            console.print(
-                f"[yellow]{service} already allocated:[/yellow] {existing['port']}"
-            )
+            console.print(f"[yellow]{service} already allocated:[/yellow] {existing['port']}")
             return
 
         service_type = infer_service_type(service)

@@ -36,13 +36,14 @@ uv run pytest --no-cov
 ```bash
 # Run all linting (required before commits)
 uv run ruff check .
+uv run ruff format --check src tests
 uv run mypy src
 
 # Auto-fix ruff issues
 uv run ruff check --fix .
 
 # Format code
-uv run ruff format .
+uv run ruff format src tests
 ```
 
 ### Running the CLI in Development

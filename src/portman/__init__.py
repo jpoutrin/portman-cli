@@ -1,6 +1,6 @@
 """Portman - Port Manager for Development Environments."""
 
-__version__ = "0.1.0"
+__version__ = "1.1.1"
 
 from .allocator import PortAllocationError, PortAllocator
 from .context import Context, get_context

@@ -1,6 +1,6 @@
 [project]
 name = "portman-cli"
-version = "1.1.0"
+version = "1.1.1"
 description = "Port Manager for Development Environments"
 readme = "README.md"
 license = { text = "MIT" }

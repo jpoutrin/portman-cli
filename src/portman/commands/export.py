@@ -6,7 +6,8 @@ import typer
 
 from ..allocator import PortAllocationError, PortAllocator
 from ..context import get_context
-from ..discovery import discover_services, infer_service_type
+from ..discovery import discover_services, discover_volumes, infer_service_type
+from ..volumes import sync_discovered_volumes
 from .common import get_db
 
 
@@ -35,6 +36,8 @@ def export_cmd(
     if auto:
         allocator = PortAllocator(db)
         services = discover_services(compose_file=compose_file)
+        volumes = discover_volumes(compose_file=compose_file)
+        sync_discovered_volumes(db, ctx, volumes)
 
         for svc in services:
             existing = db.get_allocation(ctx.hash, svc.name)

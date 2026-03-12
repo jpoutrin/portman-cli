@@ -1,142 +1,246 @@
-"""Service discovery from docker-compose files."""
+"""Service and volume discovery from docker-compose files."""
 
+import hashlib
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .context import get_context
+
+COMPOSE_FILENAMES = [
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "compose.yml",
+    "compose.yaml",
+]
+
 
 @dataclass
 class DiscoveredService:
     """A service discovered from docker-compose."""
 
-    name: str  # Service name from docker-compose
-    container_port: int  # Internal container port
-    env_var: str | None  # Environment variable name (if dynamic)
-    source: str  # Source file path
+    name: str
+    container_port: int
+    env_var: str | None
+    source: str
+
+
+@dataclass
+class DiscoveredVolume:
+    """A named Docker volume discovered from docker-compose."""
+
+    service: str | None
+    compose_volume_key: str
+    docker_volume_name: str
+    mount_target: str | None
+    source: str
+    owner: str
+    ownership_token: str
+    source_mount: str
 
 
 def discover_services(
     path: Path | None = None, compose_file: str | None = None
 ) -> list[DiscoveredService]:
-    """Discover services requiring port allocation from docker-compose files.
-
-    Scans for docker-compose.yml files and extracts services that need
-    dynamic port allocation (using environment variables or bare ports).
-
-    Port formats parsed:
-    - "8080:80"           → explicit host port, skip
-    - "${PG_PORT}:5432"   → environment variable → allocate
-    - "$PG_PORT:5432"     → environment variable → allocate
-    - "5432"              → bare port → allocate
-    - {published: "${PG_PORT}", target: 5432}  → long format with env var
-
-    Args:
-        path: Path to search for docker-compose files. Defaults to cwd.
-        compose_file: Specific compose file to use. If provided, only this file
-                      will be parsed. If not provided, searches for standard names.
-
-    Returns:
-        List of discovered services
-    """
-    from .console import debug
-
-    path = path or Path.cwd()
+    """Discover services requiring port allocation from docker-compose files."""
     services: list[DiscoveredService] = []
 
-    debug(f"discover_services(path={path}, compose_file={compose_file!r})")
-
-    # If specific compose file provided, use it
-    if compose_file:
-        compose_path = Path(compose_file)
-        debug(f"  Initial compose_path: {compose_path}")
-        if not compose_path.is_absolute():
-            compose_path = path / compose_path
-            debug(f"  Made absolute: {compose_path}")
-        debug(f"  File exists: {compose_path.exists()}")
-        if compose_path.exists():
-            debug(f"  Parsing file: {compose_path}")
-            services.extend(_parse_compose_file(compose_path))
-        else:
-            debug(f"  File does not exist: {compose_path}")
-        return services
-
-    # Otherwise, search for compose files with standard names
-    compose_files = [
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "compose.yml",
-        "compose.yaml",
-    ]
-
-    for filename in compose_files:
-        compose_path = path / filename
-        if compose_path.exists():
-            services.extend(_parse_compose_file(compose_path))
+    for resolved_compose_file in _resolve_compose_files(path=path, compose_file=compose_file):
+        services.extend(_parse_compose_file(resolved_compose_file)["services"])
 
     return services
 
 
-def _parse_compose_file(file_path: Path) -> list[DiscoveredService]:
-    """Parse a docker-compose file for services.
+def discover_volumes(
+    path: Path | None = None, compose_file: str | None = None
+) -> list[DiscoveredVolume]:
+    """Discover named Docker volumes from docker-compose files."""
+    base_path = (path or Path.cwd()).resolve()
+    context_hash = get_context(base_path).hash
+    discovered: list[DiscoveredVolume] = []
 
-    Args:
-        file_path: Path to docker-compose file
+    for resolved_compose_file in _resolve_compose_files(path=base_path, compose_file=compose_file):
+        parsed = _parse_compose_file(resolved_compose_file)
+        discovered.extend(
+            _build_discovered_volumes(
+                compose_path=resolved_compose_file,
+                context_hash=context_hash,
+                service_mounts=parsed["volume_mounts"],
+                declared_volumes=parsed["declared_volumes"],
+            )
+        )
 
-    Returns:
-        List of discovered services
-    """
+    return discovered
+
+
+def build_tracked_volume_name(context_hash: str, compose_volume_key: str) -> str:
+    """Build the deterministic Portman-owned Docker volume name."""
+    safe_key = re.sub(r"[^a-zA-Z0-9_.-]+", "-", compose_volume_key)
+    return f"portman_{context_hash}_{safe_key}"
+
+
+def build_volume_ownership_token(
+    context_hash: str, compose_file: str, compose_volume_key: str
+) -> str:
+    """Build a stable ownership token for tracked volumes."""
+    raw = f"{context_hash}:{compose_file}:{compose_volume_key}"
+    return hashlib.md5(raw.encode()).hexdigest()[:16]
+
+
+def is_portman_volume_name(name: str) -> bool:
+    """Return True when the Docker volume name matches Portman's naming scheme."""
+    return bool(re.match(r"^portman_[0-9a-f]{12}_[A-Za-z0-9_.-]+$", name))
+
+
+def _resolve_compose_files(path: Path | None, compose_file: str | None) -> list[Path]:
+    """Resolve compose files to parse."""
+    from .console import debug
+
+    base_path = (path or Path.cwd()).resolve()
+    resolved_files: list[Path] = []
+
+    debug(f"_resolve_compose_files(path={base_path}, compose_file={compose_file!r})")
+
+    if compose_file:
+        compose_path = Path(compose_file)
+        if not compose_path.is_absolute():
+            compose_path = base_path / compose_path
+        if compose_path.exists():
+            resolved_files.append(compose_path.resolve())
+        return resolved_files
+
+    for filename in COMPOSE_FILENAMES:
+        compose_path = base_path / filename
+        if compose_path.exists():
+            resolved_files.append(compose_path.resolve())
+
+    return resolved_files
+
+
+def _parse_compose_file(file_path: Path) -> dict[str, Any]:
+    """Parse a docker-compose file for services and named volume mounts."""
     services: list[DiscoveredService] = []
+    volume_mounts: list[dict[str, Any]] = []
+    declared_volumes: set[str] = set()
 
     try:
-        with open(file_path) as f:
-            data = yaml.safe_load(f)
+        with file_path.open() as handle:
+            data = yaml.safe_load(handle)
     except (OSError, yaml.YAMLError):
-        return services
+        return {
+            "services": services,
+            "volume_mounts": volume_mounts,
+            "declared_volumes": declared_volumes,
+        }
 
-    if not data or "services" not in data:
-        return services
+    if not isinstance(data, dict):
+        return {
+            "services": services,
+            "volume_mounts": volume_mounts,
+            "declared_volumes": declared_volumes,
+        }
+
+    declared = data.get("volumes", {})
+    if isinstance(declared, dict):
+        declared_volumes = {key for key in declared if isinstance(key, str)}
 
     for svc_name, svc_config in data.get("services", {}).items():
         if not isinstance(svc_config, dict):
             continue
 
-        # Get image for service type inference
         image = svc_config.get("image", "")
 
         for port_def in svc_config.get("ports", []):
-            parsed = _parse_port_definition(port_def, svc_name, image)
-            if parsed:
-                parsed.source = str(file_path)
-                services.append(parsed)
+            parsed_service = _parse_port_definition(port_def, svc_name, image)
+            if parsed_service:
+                parsed_service.source = str(file_path)
+                services.append(parsed_service)
 
-    return services
+        for volume_def in svc_config.get("volumes", []):
+            parsed_volume = _parse_volume_definition(volume_def)
+            if parsed_volume:
+                parsed_volume["service"] = svc_name
+                parsed_volume["source"] = str(file_path)
+                volume_mounts.append(parsed_volume)
+
+    return {
+        "services": services,
+        "volume_mounts": volume_mounts,
+        "declared_volumes": declared_volumes,
+    }
+
+
+def _build_discovered_volumes(
+    *,
+    compose_path: Path,
+    context_hash: str,
+    service_mounts: list[dict[str, Any]],
+    declared_volumes: set[str],
+) -> list[DiscoveredVolume]:
+    """Build discovered volume records from parsed compose mounts."""
+    discovered: list[DiscoveredVolume] = []
+    referenced_keys = {mount["compose_volume_key"] for mount in service_mounts}
+    service_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+    for mount in service_mounts:
+        service_map[mount["compose_volume_key"]].append(mount)
+
+    for compose_volume_key in sorted(referenced_keys):
+        docker_volume_name = build_tracked_volume_name(context_hash, compose_volume_key)
+        ownership_token = build_volume_ownership_token(
+            context_hash=context_hash,
+            compose_file=str(compose_path),
+            compose_volume_key=compose_volume_key,
+        )
+        for mount in service_map[compose_volume_key]:
+            discovered.append(
+                DiscoveredVolume(
+                    service=mount["service"],
+                    compose_volume_key=compose_volume_key,
+                    docker_volume_name=docker_volume_name,
+                    mount_target=mount.get("mount_target"),
+                    source=str(compose_path),
+                    owner="portman",
+                    ownership_token=ownership_token,
+                    source_mount=mount["source_mount"],
+                )
+            )
+
+    for compose_volume_key in sorted(declared_volumes - referenced_keys):
+        discovered.append(
+            DiscoveredVolume(
+                service=None,
+                compose_volume_key=compose_volume_key,
+                docker_volume_name=build_tracked_volume_name(context_hash, compose_volume_key),
+                mount_target=None,
+                source=str(compose_path),
+                owner="portman",
+                ownership_token=build_volume_ownership_token(
+                    context_hash=context_hash,
+                    compose_file=str(compose_path),
+                    compose_volume_key=compose_volume_key,
+                ),
+                source_mount=compose_volume_key,
+            )
+        )
+
+    return discovered
 
 
 def _parse_port_definition(
     port_def: Any, service_name: str, image: str = ""
 ) -> DiscoveredService | None:
-    """Parse a port definition from docker-compose.
-
-    Args:
-        port_def: Port definition (string or dict)
-        service_name: Name of the service
-        image: Docker image name (for service type inference)
-
-    Returns:
-        DiscoveredService if needs allocation, None otherwise
-    """
+    """Parse a port definition from docker-compose."""
     if isinstance(port_def, dict):
-        # Long format: {published: ..., target: ...}
         published = port_def.get("published")
         target = port_def.get("target")
 
         if isinstance(published, str) and published.startswith("$"):
-            # Environment variable - handle ${VAR:-default} format
             env_var = published.lstrip("${").rstrip("}")
-            # Remove default value if present (e.g., "VAR:-5432" -> "VAR")
             if ":-" in env_var:
                 env_var = env_var.split(":-")[0]
             return DiscoveredService(
@@ -145,13 +249,10 @@ def _parse_port_definition(
                 env_var=env_var,
                 source="",
             )
-        # Explicit port, skip
         return None
 
-    # String format
     port_str = str(port_def)
 
-    # Variable format: ${VAR}:5432 or $VAR:5432 or ${VAR:-default}:5432
     var_match = re.match(r"^\$\{?(\w+)(?::-[^}]+)?\}?:(\d+)(?:/\w+)?$", port_str)
     if var_match:
         return DiscoveredService(
@@ -161,7 +262,6 @@ def _parse_port_definition(
             source="",
         )
 
-    # Bare port: "5432" or "5432/tcp"
     bare_match = re.match(r"^(\d+)(?:/\w+)?$", port_str)
     if bare_match:
         return DiscoveredService(
@@ -171,24 +271,61 @@ def _parse_port_definition(
             source="",
         )
 
-    # Explicit mapping like "8080:80", skip
     return None
 
 
+def _parse_volume_definition(volume_def: Any) -> dict[str, Any] | None:
+    """Parse a named volume mount from docker-compose."""
+    if isinstance(volume_def, dict):
+        if volume_def.get("type", "volume") != "volume":
+            return None
+
+        source = volume_def.get("source")
+        target = volume_def.get("target")
+        if not isinstance(source, str) or not source or _looks_like_bind_mount(source):
+            return None
+
+        return {
+            "compose_volume_key": source,
+            "mount_target": str(target) if target else None,
+            "source_mount": f"{source}:{target}" if target else source,
+        }
+
+    if not isinstance(volume_def, str):
+        return None
+
+    parts = volume_def.split(":")
+    if len(parts) < 2:
+        return None
+
+    source = parts[0]
+    target = parts[1] if len(parts) >= 2 else None
+    if not source or _looks_like_bind_mount(source):
+        return None
+
+    return {
+        "compose_volume_key": source,
+        "mount_target": target,
+        "source_mount": volume_def,
+    }
+
+
+def _looks_like_bind_mount(source: str) -> bool:
+    """Return True when the mount source looks like a bind mount path."""
+    return (
+        source.startswith(".")
+        or source.startswith("/")
+        or source.startswith("~")
+        or source.startswith("${")
+        or re.match(r"^[A-Za-z]:[\\/]", source) is not None
+    )
+
+
 def infer_service_type(service_name: str, image: str | None = None) -> str:
-    """Infer service type from name or image for port range selection.
-
-    Args:
-        service_name: Name of the service
-        image: Docker image name (optional)
-
-    Returns:
-        Service type identifier (e.g., "postgres", "redis", "default")
-    """
+    """Infer service type from name or image for port range selection."""
     name_lower = service_name.lower()
     image_lower = (image or "").lower()
 
-    # Service type mappings
     mappings: dict[tuple[str, ...], str] = {
         ("postgres", "pg", "psql", "postgresql"): "postgres",
         ("mysql", "mariadb"): "mysql",

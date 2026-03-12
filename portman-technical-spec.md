@@ -16,6 +16,7 @@ Lors du développement sur plusieurs branches/worktrees d'un même projet (ou pl
 - Alloue des ports uniques machine-wide sans conflit
 - S'intègre nativement avec `direnv` pour une expérience transparente
 - Découvre automatiquement les services depuis `docker-compose.yml`
+- Suit aussi les volumes Docker nommés déclarés dans Compose
 - Nettoie automatiquement les allocations orphelines (pruning)
 
 ### 1.3 Philosophie
@@ -147,7 +148,7 @@ Utiliser `platformdirs` pour la détection cross-platform.
 CREATE TABLE schema_version (
     version INTEGER PRIMARY KEY
 );
-INSERT INTO schema_version VALUES (1);
+INSERT INTO schema_version VALUES (2);
 
 -- Allocations de ports
 CREATE TABLE allocations (
@@ -202,7 +203,40 @@ INSERT INTO port_ranges VALUES ('meilisearch', 7700, 7799);
 INSERT INTO port_ranges VALUES ('rabbitmq', 5672, 5699);
 INSERT INTO port_ranges VALUES ('kafka', 9092, 9099);
 INSERT INTO port_ranges VALUES ('default', 10000, 19999);
+
+-- Volumes Docker suivis
+CREATE TABLE tracked_volumes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    context_hash TEXT NOT NULL,
+    context_path TEXT NOT NULL,
+    context_label TEXT,
+    service TEXT NOT NULL DEFAULT '',
+    compose_file TEXT NOT NULL,
+    compose_volume_key TEXT NOT NULL,
+    docker_volume_name TEXT NOT NULL,
+    source_mount TEXT NOT NULL,
+    owner TEXT NOT NULL DEFAULT 'portman',
+    ownership_token TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_accessed_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(context_hash, compose_file, compose_volume_key, service)
+);
+
+CREATE INDEX idx_tracked_volumes_context ON tracked_volumes(context_hash);
+CREATE INDEX idx_tracked_volumes_name ON tracked_volumes(docker_volume_name);
+CREATE INDEX idx_tracked_volumes_last_accessed ON tracked_volumes(last_accessed_at);
 ```
+
+Convention de nommage des volumes Portman :
+
+```text
+portman_<context_hash>_<compose_volume_key>
+```
+
+Portman ne supprime un volume Docker que si :
+- `owner = 'portman'`
+- le nom suit cette convention
+- le volume existe réellement côté Docker au moment du `prune`
 
 ---
 

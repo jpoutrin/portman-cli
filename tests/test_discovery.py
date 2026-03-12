@@ -2,8 +2,12 @@
 
 from portman.discovery import (
     _parse_port_definition,
+    _parse_volume_definition,
+    build_tracked_volume_name,
     discover_services,
+    discover_volumes,
     infer_service_type,
+    is_portman_volume_name,
 )
 
 
@@ -210,3 +214,63 @@ def test_discover_services_with_nonexistent_compose_file(temp_dir):
     services = discover_services(temp_dir, compose_file="nonexistent.yml")
 
     assert len(services) == 0
+
+
+def test_discover_volumes_from_short_and_long_syntax(temp_dir):
+    """Test discovering named volumes from compose services."""
+    compose_content = """
+version: '3.8'
+services:
+  postgres:
+    image: postgres:14
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./local-data:/ignored
+  redis:
+    image: redis:7
+    volumes:
+      - type: volume
+        source: redis_data
+        target: /data
+  web:
+    image: nginx
+    volumes:
+      - /tmp/cache:/cache
+volumes:
+  postgres_data:
+  redis_data:
+  orphaned_data:
+"""
+    compose_path = temp_dir / "docker-compose.yml"
+    compose_path.write_text(compose_content)
+
+    volumes = discover_volumes(temp_dir)
+
+    assert len(volumes) == 3
+    postgres = next(v for v in volumes if v.compose_volume_key == "postgres_data")
+    assert postgres.service == "postgres"
+    assert postgres.mount_target == "/var/lib/postgresql/data"
+    assert postgres.docker_volume_name.startswith("portman_")
+
+    redis = next(v for v in volumes if v.compose_volume_key == "redis_data")
+    assert redis.service == "redis"
+    assert redis.mount_target == "/data"
+
+    orphaned = next(v for v in volumes if v.compose_volume_key == "orphaned_data")
+    assert orphaned.service is None
+    assert orphaned.mount_target is None
+
+
+def test_parse_volume_definition_ignores_bind_mounts():
+    """Test named volume parsing excludes bind mounts and anonymous mounts."""
+    assert _parse_volume_definition("./data:/var/lib/data") is None
+    assert _parse_volume_definition("/abs/data:/var/lib/data") is None
+    assert _parse_volume_definition({"type": "bind", "source": "./data", "target": "/data"}) is None
+    assert _parse_volume_definition("/var/lib/postgresql/data") is None
+
+
+def test_build_tracked_volume_name_and_match():
+    """Test deterministic tracked volume names."""
+    name = build_tracked_volume_name("abc123def456", "postgres_data")
+    assert name == "portman_abc123def456_postgres_data"
+    assert is_portman_volume_name(name)

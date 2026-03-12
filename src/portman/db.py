@@ -1,13 +1,15 @@
-"""Database layer for Portman - SQLite-based port registry."""
+"""Database layer for Portman - SQLite-based registry."""
 
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import platformdirs
+
+
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -20,7 +22,7 @@ class PortRange:
 
 
 class Database:
-    """SQLite database manager for port allocations."""
+    """SQLite database manager for allocations and tracked volumes."""
 
     _lock = threading.Lock()
 
@@ -46,65 +48,114 @@ class Database:
         return conn
 
     def _init_schema(self) -> None:
-        """Initialize database schema if not exists."""
+        """Initialize or migrate the database schema."""
         with self._lock, self._get_connection() as conn:
-            # Check if schema is initialized
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-            )
-            if cursor.fetchone() is None:
-                # Create schema
-                conn.executescript(
-                    """
-                    -- Version tracking
-                    CREATE TABLE schema_version (
-                        version INTEGER PRIMARY KEY
-                    );
-                    INSERT INTO schema_version VALUES (1);
+            current_version = self._get_schema_version(conn)
+            if current_version == 0:
+                self._create_schema_v1(conn)
+                current_version = 1
 
-                    -- Port allocations
-                    CREATE TABLE allocations (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        context_hash TEXT NOT NULL,
-                        context_path TEXT NOT NULL,
-                        context_label TEXT,
-                        service TEXT NOT NULL,
-                        port INTEGER NOT NULL UNIQUE,
-                        container_port INTEGER,
-                        env_var TEXT,
-                        source TEXT,
-                        created_at TEXT DEFAULT (datetime('now')),
-                        last_accessed_at TEXT DEFAULT (datetime('now')),
-                        UNIQUE(context_hash, service)
-                    );
+            if current_version < 2:
+                self._migrate_to_v2(conn)
+                current_version = 2
 
-                    CREATE INDEX idx_allocations_context ON allocations(context_hash);
-                    CREATE INDEX idx_allocations_port ON allocations(port);
-                    CREATE INDEX idx_allocations_last_accessed ON allocations(last_accessed_at);
+            self._set_schema_version(conn, current_version)
+            conn.commit()
 
-                    -- Port ranges configuration
-                    CREATE TABLE port_ranges (
-                        service TEXT PRIMARY KEY,
-                        range_start INTEGER NOT NULL,
-                        range_end INTEGER NOT NULL
-                    );
+    def _get_schema_version(self, conn: sqlite3.Connection) -> int:
+        """Return the current schema version or 0 if uninitialized."""
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
+        )
+        if cursor.fetchone() is None:
+            return 0
 
-                    -- Default ranges
-                    INSERT INTO port_ranges VALUES ('postgres', 5432, 5499);
-                    INSERT INTO port_ranges VALUES ('postgresql', 5432, 5499);
-                    INSERT INTO port_ranges VALUES ('mysql', 3306, 3399);
-                    INSERT INTO port_ranges VALUES ('mariadb', 3306, 3399);
-                    INSERT INTO port_ranges VALUES ('redis', 6379, 6449);
-                    INSERT INTO port_ranges VALUES ('mongodb', 27017, 27099);
-                    INSERT INTO port_ranges VALUES ('mongo', 27017, 27099);
-                    INSERT INTO port_ranges VALUES ('elasticsearch', 9200, 9299);
-                    INSERT INTO port_ranges VALUES ('meilisearch', 7700, 7799);
-                    INSERT INTO port_ranges VALUES ('rabbitmq', 5672, 5699);
-                    INSERT INTO port_ranges VALUES ('kafka', 9092, 9099);
-                    INSERT INTO port_ranges VALUES ('default', 10000, 19999);
-                """
-                )
-                conn.commit()
+        cursor = conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
+        row = cursor.fetchone()
+        return int(row["version"]) if row else 0
+
+    def _set_schema_version(self, conn: sqlite3.Connection, version: int) -> None:
+        """Persist the latest schema version."""
+        conn.execute("DELETE FROM schema_version")
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+
+    def _create_schema_v1(self, conn: sqlite3.Connection) -> None:
+        """Create the original schema."""
+        conn.executescript(
+            """
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY
+            );
+
+            CREATE TABLE allocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                context_hash TEXT NOT NULL,
+                context_path TEXT NOT NULL,
+                context_label TEXT,
+                service TEXT NOT NULL,
+                port INTEGER NOT NULL UNIQUE,
+                container_port INTEGER,
+                env_var TEXT,
+                source TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_accessed_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(context_hash, service)
+            );
+
+            CREATE INDEX idx_allocations_context ON allocations(context_hash);
+            CREATE INDEX idx_allocations_port ON allocations(port);
+            CREATE INDEX idx_allocations_last_accessed ON allocations(last_accessed_at);
+
+            CREATE TABLE port_ranges (
+                service TEXT PRIMARY KEY,
+                range_start INTEGER NOT NULL,
+                range_end INTEGER NOT NULL
+            );
+
+            INSERT INTO port_ranges VALUES ('postgres', 5432, 5499);
+            INSERT INTO port_ranges VALUES ('postgresql', 5432, 5499);
+            INSERT INTO port_ranges VALUES ('mysql', 3306, 3399);
+            INSERT INTO port_ranges VALUES ('mariadb', 3306, 3399);
+            INSERT INTO port_ranges VALUES ('redis', 6379, 6449);
+            INSERT INTO port_ranges VALUES ('mongodb', 27017, 27099);
+            INSERT INTO port_ranges VALUES ('mongo', 27017, 27099);
+            INSERT INTO port_ranges VALUES ('elasticsearch', 9200, 9299);
+            INSERT INTO port_ranges VALUES ('meilisearch', 7700, 7799);
+            INSERT INTO port_ranges VALUES ('rabbitmq', 5672, 5699);
+            INSERT INTO port_ranges VALUES ('kafka', 9092, 9099);
+            INSERT INTO port_ranges VALUES ('default', 10000, 19999);
+            """
+        )
+
+    def _migrate_to_v2(self, conn: sqlite3.Connection) -> None:
+        """Add tracked volume support."""
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tracked_volumes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                context_hash TEXT NOT NULL,
+                context_path TEXT NOT NULL,
+                context_label TEXT,
+                service TEXT NOT NULL DEFAULT '',
+                compose_file TEXT NOT NULL,
+                compose_volume_key TEXT NOT NULL,
+                docker_volume_name TEXT NOT NULL,
+                source_mount TEXT NOT NULL,
+                owner TEXT NOT NULL DEFAULT 'portman',
+                ownership_token TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                last_accessed_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(context_hash, compose_file, compose_volume_key, service)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_tracked_volumes_context
+                ON tracked_volumes(context_hash);
+            CREATE INDEX IF NOT EXISTS idx_tracked_volumes_name
+                ON tracked_volumes(docker_volume_name);
+            CREATE INDEX IF NOT EXISTS idx_tracked_volumes_last_accessed
+                ON tracked_volumes(last_accessed_at);
+            """
+        )
 
     def create_allocation(
         self,
@@ -117,24 +168,7 @@ class Database:
         env_var: str | None = None,
         source: str | None = None,
     ) -> int:
-        """Create a new port allocation.
-
-        Args:
-            context_hash: Context hash identifier
-            context_path: Absolute path to the project
-            context_label: Human-readable label
-            service: Service name
-            port: Allocated port number
-            container_port: Internal container port
-            env_var: Environment variable name
-            source: Source of the allocation
-
-        Returns:
-            ID of the created allocation
-
-        Raises:
-            sqlite3.IntegrityError: If port or context+service already allocated
-        """
+        """Create a new port allocation."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -159,15 +193,7 @@ class Database:
             return cursor.lastrowid
 
     def get_allocation(self, context_hash: str, service: str) -> dict[str, Any] | None:
-        """Get allocation for a context and service.
-
-        Args:
-            context_hash: Context hash
-            service: Service name
-
-        Returns:
-            Allocation dict or None if not found
-        """
+        """Get allocation for a context and service."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -180,14 +206,7 @@ class Database:
             return dict(row) if row else None
 
     def get_allocations_by_context(self, context_hash: str) -> list[dict[str, Any]]:
-        """Get all allocations for a context.
-
-        Args:
-            context_hash: Context hash
-
-        Returns:
-            List of allocation dicts
-        """
+        """Get all allocations for a context."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -200,11 +219,7 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_all_allocations(self) -> list[dict[str, Any]]:
-        """Get all allocations.
-
-        Returns:
-            List of all allocation dicts
-        """
+        """Get all allocations."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute(
                 """
@@ -215,21 +230,13 @@ class Database:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_all_allocated_ports(self) -> set[int]:
-        """Get set of all allocated ports.
-
-        Returns:
-            Set of port numbers
-        """
+        """Get set of all allocated ports."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute("SELECT port FROM allocations")
             return {row["port"] for row in cursor.fetchall()}
 
     def touch_allocation(self, allocation_id: int) -> None:
-        """Update last_accessed_at timestamp.
-
-        Args:
-            allocation_id: Allocation ID to update
-        """
+        """Update allocation access timestamp."""
         with self._lock, self._get_connection() as conn:
             conn.execute(
                 """
@@ -242,39 +249,20 @@ class Database:
             conn.commit()
 
     def delete_allocation(self, allocation_id: int) -> None:
-        """Delete an allocation.
-
-        Args:
-            allocation_id: Allocation ID to delete
-        """
+        """Delete an allocation."""
         with self._lock, self._get_connection() as conn:
             conn.execute("DELETE FROM allocations WHERE id = ?", (allocation_id,))
             conn.commit()
 
     def delete_allocations_by_context(self, context_hash: str) -> int:
-        """Delete all allocations for a context.
-
-        Args:
-            context_hash: Context hash
-
-        Returns:
-            Number of deleted allocations
-        """
+        """Delete all allocations for a context."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute("DELETE FROM allocations WHERE context_hash = ?", (context_hash,))
             conn.commit()
             return cursor.rowcount
 
     def delete_allocation_by_service(self, context_hash: str, service: str) -> bool:
-        """Delete allocation for a specific service in a context.
-
-        Args:
-            context_hash: Context hash
-            service: Service name
-
-        Returns:
-            True if deleted, False if not found
-        """
+        """Delete allocation for a specific service in a context."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute(
                 "DELETE FROM allocations WHERE context_hash = ? AND service = ?",
@@ -284,58 +272,205 @@ class Database:
             return cursor.rowcount > 0
 
     def get_stale_allocations(self, days: int = 30) -> list[dict[str, Any]]:
-        """Get allocations not accessed in the last N days.
-
-        Args:
-            days: Number of days
-
-        Returns:
-            List of stale allocation dicts
-        """
-        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+        """Get allocations not accessed in the last N days."""
+        modifier = f"-{days} days"
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute(
                 """
                 SELECT * FROM allocations
-                WHERE last_accessed_at < ?
+                WHERE last_accessed_at < datetime('now', ?)
                 ORDER BY last_accessed_at
                 """,
-                (cutoff_date,),
+                (modifier,),
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def create_tracked_volume(
+        self,
+        *,
+        context_hash: str,
+        context_path: str,
+        context_label: str,
+        service: str | None,
+        compose_file: str,
+        compose_volume_key: str,
+        docker_volume_name: str,
+        source_mount: str,
+        owner: str,
+        ownership_token: str,
+    ) -> int:
+        """Create a tracked volume record."""
+        normalized_service = service or ""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO tracked_volumes (
+                    context_hash, context_path, context_label, service, compose_file,
+                    compose_volume_key, docker_volume_name, source_mount, owner,
+                    ownership_token
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    context_hash,
+                    context_path,
+                    context_label,
+                    normalized_service,
+                    compose_file,
+                    compose_volume_key,
+                    docker_volume_name,
+                    source_mount,
+                    owner,
+                    ownership_token,
+                ),
+            )
+            conn.commit()
+            assert cursor.lastrowid is not None, "Failed to create tracked volume"
+            return cursor.lastrowid
+
+    def upsert_tracked_volume(
+        self,
+        *,
+        context_hash: str,
+        context_path: str,
+        context_label: str,
+        service: str | None,
+        compose_file: str,
+        compose_volume_key: str,
+        docker_volume_name: str,
+        source_mount: str,
+        owner: str,
+        ownership_token: str,
+    ) -> int:
+        """Create or refresh a tracked volume record."""
+        normalized_service = service or ""
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO tracked_volumes (
+                    context_hash, context_path, context_label, service, compose_file,
+                    compose_volume_key, docker_volume_name, source_mount, owner,
+                    ownership_token
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(context_hash, compose_file, compose_volume_key, service)
+                DO UPDATE SET
+                    context_path = excluded.context_path,
+                    context_label = excluded.context_label,
+                    docker_volume_name = excluded.docker_volume_name,
+                    source_mount = excluded.source_mount,
+                    owner = excluded.owner,
+                    ownership_token = excluded.ownership_token,
+                    last_accessed_at = datetime('now')
+                """,
+                (
+                    context_hash,
+                    context_path,
+                    context_label,
+                    normalized_service,
+                    compose_file,
+                    compose_volume_key,
+                    docker_volume_name,
+                    source_mount,
+                    owner,
+                    ownership_token,
+                ),
+            )
+            cursor = conn.execute(
+                """
+                SELECT id FROM tracked_volumes
+                WHERE context_hash = ? AND compose_file = ? AND compose_volume_key = ?
+                  AND service = ?
+                """,
+                (context_hash, compose_file, compose_volume_key, normalized_service),
+            )
+            row = cursor.fetchone()
+            conn.commit()
+            assert row is not None, "Failed to upsert tracked volume"
+            return int(row["id"])
+
+    def get_tracked_volumes_by_context(self, context_hash: str) -> list[dict[str, Any]]:
+        """Get tracked volumes for a context."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM tracked_volumes
+                WHERE context_hash = ?
+                ORDER BY compose_volume_key, service
+                """,
+                (context_hash,),
+            )
+            return [self._normalize_tracked_volume_row(row) for row in cursor.fetchall()]
+
+    def get_all_tracked_volumes(self) -> list[dict[str, Any]]:
+        """Get all tracked volumes."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM tracked_volumes
+                ORDER BY context_label, compose_volume_key, service
+                """
+            )
+            return [self._normalize_tracked_volume_row(row) for row in cursor.fetchall()]
+
+    def touch_tracked_volume(self, tracked_volume_id: int) -> None:
+        """Update tracked volume access timestamp."""
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE tracked_volumes
+                SET last_accessed_at = datetime('now')
+                WHERE id = ?
+                """,
+                (tracked_volume_id,),
+            )
+            conn.commit()
+
+    def delete_tracked_volume(self, tracked_volume_id: int) -> None:
+        """Delete a tracked volume record."""
+        with self._lock, self._get_connection() as conn:
+            conn.execute("DELETE FROM tracked_volumes WHERE id = ?", (tracked_volume_id,))
+            conn.commit()
+
+    def delete_tracked_volumes_by_context(self, context_hash: str) -> int:
+        """Delete all tracked volume rows for a context."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM tracked_volumes WHERE context_hash = ?",
+                (context_hash,),
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def get_stale_tracked_volumes(self, days: int = 30) -> list[dict[str, Any]]:
+        """Get tracked volumes not accessed in the last N days."""
+        modifier = f"-{days} days"
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM tracked_volumes
+                WHERE last_accessed_at < datetime('now', ?)
+                ORDER BY last_accessed_at
+                """,
+                (modifier,),
+            )
+            return [self._normalize_tracked_volume_row(row) for row in cursor.fetchall()]
+
     def get_port_range(self, service: str) -> PortRange:
-        """Get port range for a service.
-
-        Args:
-            service: Service name
-
-        Returns:
-            PortRange object (returns 'default' range if service not found)
-        """
+        """Get port range for a service."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute("SELECT * FROM port_ranges WHERE service = ?", (service,))
             row = cursor.fetchone()
 
             if row is None:
-                # Try to find default range
                 cursor = conn.execute("SELECT * FROM port_ranges WHERE service = 'default'")
                 row = cursor.fetchone()
 
             if row is None:
-                # Fallback hardcoded default
                 return PortRange(service="default", start=10000, end=19999)
 
             return PortRange(service=row["service"], start=row["range_start"], end=row["range_end"])
 
     def set_port_range(self, service: str, start: int, end: int) -> None:
-        """Set or update port range for a service.
-
-        Args:
-            service: Service name
-            start: Range start port
-            end: Range end port
-        """
+        """Set or update port range for a service."""
         with self._lock, self._get_connection() as conn:
             conn.execute(
                 """
@@ -350,11 +485,7 @@ class Database:
             conn.commit()
 
     def get_all_port_ranges(self) -> list[PortRange]:
-        """Get all configured port ranges.
-
-        Returns:
-            List of PortRange objects
-        """
+        """Get all configured port ranges."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.execute("SELECT * FROM port_ranges ORDER BY service")
             return [
@@ -365,3 +496,9 @@ class Database:
                 )
                 for row in cursor.fetchall()
             ]
+
+    def _normalize_tracked_volume_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        """Convert a tracked volume row to a dict with empty service normalized to None."""
+        result = dict(row)
+        result["service"] = result["service"] or None
+        return result

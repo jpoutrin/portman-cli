@@ -33,14 +33,41 @@ def prune(
         stale_result = pruner.prune_stale(days=stale_days, dry_run=True)
         result.removed.extend(stale_result.removed)
 
-    if not result.removed:
-        console.print("[green]No orphaned allocations found[/green]")
+    total_candidates = (
+        len(result.removed)
+        + len(result.removed_tracked_volumes)
+        + len(result.removed_docker_volumes)
+        + len(result.skipped_tracked_volumes)
+    )
+
+    if total_candidates == 0:
+        console.print("[green]No orphaned tracked resources found[/green]")
         return
 
-    # Show what would be removed
-    console.print(f"[yellow]Would remove {len(result.removed)} allocation(s):[/yellow]")
-    for alloc in result.removed:
-        console.print(f"  - {alloc['context_label']}: {alloc['service']} ({alloc['port']})")
+    if result.removed:
+        console.print(f"[yellow]Port allocations to remove: {len(result.removed)}[/yellow]")
+        for alloc in result.removed:
+            console.print(f"  - {alloc['context_label']}: {alloc['service']} ({alloc['port']})")
+
+    if result.removed_tracked_volumes:
+        console.print(
+            f"[yellow]Tracked volume records to remove: {len(result.removed_tracked_volumes)}[/yellow]"
+        )
+        for volume in result.removed_tracked_volumes:
+            console.print(
+                f"  - {volume['context_label']}: {volume['docker_volume_name']}"
+                f" ({volume['compose_volume_key']})"
+            )
+
+    if result.removed_docker_volumes:
+        console.print(f"[yellow]Docker volumes to delete: {len(result.removed_docker_volumes)}[/yellow]")
+        for docker_volume in result.removed_docker_volumes:
+            console.print(f"  - {docker_volume}")
+
+    if result.skipped_tracked_volumes:
+        console.print(f"[yellow]Skipped volume candidates: {len(result.skipped_tracked_volumes)}[/yellow]")
+        for message in result.skipped_tracked_volumes:
+            console.print(f"  - {message}")
 
     if dry_run:
         console.print("\n[dim]Run without --dry-run to remove.[/dim]")
@@ -58,5 +85,16 @@ def prune(
     if stale_days:
         stale_result = pruner.prune_stale(days=stale_days, dry_run=False)
         result.removed.extend(stale_result.removed)
+        result.removed_tracked_volumes.extend(stale_result.removed_tracked_volumes)
+        result.removed_docker_volumes.extend(stale_result.removed_docker_volumes)
+        result.skipped_tracked_volumes.extend(stale_result.skipped_tracked_volumes)
+        result.errors.extend(stale_result.errors)
 
-    console.print(f"[green]Removed {len(result.removed)} allocation(s)[/green]")
+    console.print(
+        "[green]Removed "
+        f"{len(result.removed)} allocation(s), "
+        f"{len(result.removed_tracked_volumes)} tracked volume record(s), and "
+        f"{len(result.removed_docker_volumes)} Docker volume(s)[/green]"
+    )
+    for error in result.errors:
+        console.print(f"[red]Error:[/red] {error}")

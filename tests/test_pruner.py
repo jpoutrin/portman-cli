@@ -143,3 +143,98 @@ def test_prune_multiple_allocations(mock_db, temp_dir):
     assert len(result.removed) == 2
     assert len(result.kept) == 1
     assert result.kept[0]["context_hash"] == "valid1"
+
+
+class FakeDockerInspector:
+    """Minimal Docker inspector stub for prune tests."""
+
+    def __init__(self, *, available=True, existing=None, removable=None):
+        self.available = available
+        self.existing = set(existing or [])
+        self.removable = set(removable or self.existing)
+        self.removed: list[str] = []
+
+    def is_docker_available(self) -> bool:
+        return self.available
+
+    def inspect_volume(self, name: str) -> dict | None:
+        return {"Name": name} if name in self.existing else None
+
+    def remove_volume(self, name: str) -> bool:
+        if name in self.removable:
+            self.existing.discard(name)
+            self.removed.append(name)
+            return True
+        return False
+
+
+def test_prune_removes_portman_owned_tracked_volume(mock_db):
+    """Test prune removes Docker volume and registry row when safe."""
+    docker_volume_name = "portman_abc123def456_postgres_data"
+    mock_db.create_tracked_volume(
+        context_hash="abc123def456",
+        context_path="/nonexistent/path",
+        context_label="orphan/test",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name=docker_volume_name,
+        source_mount="postgres_data:/var/lib/postgresql/data",
+        owner="portman",
+        ownership_token="token123",
+    )
+
+    pruner = Pruner(
+        mock_db,
+        docker=FakeDockerInspector(existing={docker_volume_name}),
+    )
+    result = pruner.prune()
+
+    assert result.removed_docker_volumes == [docker_volume_name]
+    assert len(result.removed_tracked_volumes) == 1
+    assert mock_db.get_all_tracked_volumes() == []
+
+
+def test_prune_skips_tracked_volume_when_docker_unavailable(mock_db):
+    """Test prune skips tracked volume deletion if Docker cannot be reached."""
+    mock_db.create_tracked_volume(
+        context_hash="abc123def456",
+        context_path="/nonexistent/path",
+        context_label="orphan/test",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name="portman_abc123def456_postgres_data",
+        source_mount="postgres_data:/var/lib/postgresql/data",
+        owner="portman",
+        ownership_token="token123",
+    )
+
+    pruner = Pruner(mock_db, docker=FakeDockerInspector(available=False))
+    result = pruner.prune()
+
+    assert len(result.removed_tracked_volumes) == 0
+    assert len(result.skipped_tracked_volumes) == 1
+    assert len(mock_db.get_all_tracked_volumes()) == 1
+
+
+def test_prune_skips_non_portman_volume_name(mock_db):
+    """Test prune refuses ambiguous tracked volumes."""
+    mock_db.create_tracked_volume(
+        context_hash="abc123def456",
+        context_path="/nonexistent/path",
+        context_label="orphan/test",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name="shared_postgres_data",
+        source_mount="postgres_data:/var/lib/postgresql/data",
+        owner="portman",
+        ownership_token="token123",
+    )
+
+    pruner = Pruner(mock_db, docker=FakeDockerInspector(existing={"shared_postgres_data"}))
+    result = pruner.prune()
+
+    assert len(result.removed_tracked_volumes) == 0
+    assert len(result.skipped_tracked_volumes) == 1

@@ -4,6 +4,8 @@ import sqlite3
 
 import pytest
 
+from portman.db import Database
+
 
 def test_db_initialization(mock_db):
     """Test database is properly initialized."""
@@ -23,6 +25,12 @@ def test_db_initialization(mock_db):
     # Check port_ranges table exists
     cursor = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='port_ranges'"
+    )
+    assert cursor.fetchone() is not None
+
+    # Check tracked_volumes table exists
+    cursor = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tracked_volumes'"
     )
     assert cursor.fetchone() is not None
 
@@ -210,3 +218,141 @@ def test_set_port_range(mock_db):
     port_range = mock_db.get_port_range("custom")
     assert port_range.start == 9000
     assert port_range.end == 9099
+
+
+def test_db_migrates_v1_to_v2(temp_dir):
+    """Test schema migration preserves existing allocations."""
+    db_path = temp_dir / "migration.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
+        INSERT INTO schema_version VALUES (1);
+
+        CREATE TABLE allocations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            context_hash TEXT NOT NULL,
+            context_path TEXT NOT NULL,
+            context_label TEXT,
+            service TEXT NOT NULL,
+            port INTEGER NOT NULL UNIQUE,
+            container_port INTEGER,
+            env_var TEXT,
+            source TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_accessed_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(context_hash, service)
+        );
+
+        CREATE TABLE port_ranges (
+            service TEXT PRIMARY KEY,
+            range_start INTEGER NOT NULL,
+            range_end INTEGER NOT NULL
+        );
+        INSERT INTO port_ranges VALUES ('default', 10000, 19999);
+        INSERT INTO allocations (context_hash, context_path, context_label, service, port)
+        VALUES ('ctx1', '/tmp/test', 'test/main', 'postgres', 5432);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    migrated = Database(db_path)
+    allocation = migrated.get_allocation("ctx1", "postgres")
+    assert allocation is not None
+    assert allocation["port"] == 5432
+
+    conn = migrated._get_connection()
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert version == 2
+    tracked_volumes = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='tracked_volumes'"
+    ).fetchone()
+    assert tracked_volumes is not None
+
+
+def test_create_tracked_volume(mock_db):
+    """Test creating a tracked volume record."""
+    volume_id = mock_db.create_tracked_volume(
+        context_hash="ctx1",
+        context_path="/path1",
+        context_label="test1",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name="portman_ctx1_postgres_data",
+        source_mount="postgres_data:/var/lib/postgresql/data",
+        owner="portman",
+        ownership_token="token123",
+    )
+
+    assert volume_id > 0
+    volumes = mock_db.get_tracked_volumes_by_context("ctx1")
+    assert len(volumes) == 1
+    assert volumes[0]["compose_volume_key"] == "postgres_data"
+
+
+def test_upsert_tracked_volume_updates_existing_row(mock_db):
+    """Test tracked volume upsert refreshes an existing row."""
+    first_id = mock_db.upsert_tracked_volume(
+        context_hash="ctx1",
+        context_path="/path1",
+        context_label="test1",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name="portman_ctx1_postgres_data",
+        source_mount="postgres_data:/var/lib/postgresql/data",
+        owner="portman",
+        ownership_token="token123",
+    )
+
+    second_id = mock_db.upsert_tracked_volume(
+        context_hash="ctx1",
+        context_path="/path2",
+        context_label="test2",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name="portman_ctx1_postgres_data",
+        source_mount="postgres_data:/data",
+        owner="portman",
+        ownership_token="token456",
+    )
+
+    assert first_id == second_id
+    volume = mock_db.get_tracked_volumes_by_context("ctx1")[0]
+    assert volume["context_path"] == "/path2"
+    assert volume["source_mount"] == "postgres_data:/data"
+    assert volume["ownership_token"] == "token456"
+
+
+def test_get_stale_tracked_volumes(mock_db, temp_dir):
+    """Test stale tracked volume lookup."""
+    volume_id = mock_db.create_tracked_volume(
+        context_hash="ctx1",
+        context_path=str(temp_dir),
+        context_label="test1",
+        service="postgres",
+        compose_file="/tmp/docker-compose.yml",
+        compose_volume_key="postgres_data",
+        docker_volume_name="portman_ctx1_postgres_data",
+        source_mount="postgres_data:/var/lib/postgresql/data",
+        owner="portman",
+        ownership_token="token123",
+    )
+
+    conn = mock_db._get_connection()
+    conn.execute(
+        """
+        UPDATE tracked_volumes
+        SET last_accessed_at = datetime('now', '-40 days')
+        WHERE id = ?
+        """,
+        (volume_id,),
+    )
+    conn.commit()
+
+    stale = mock_db.get_stale_tracked_volumes(days=30)
+    assert len(stale) == 1
+    assert stale[0]["compose_volume_key"] == "postgres_data"

@@ -2,7 +2,7 @@
 
 **Port Manager for Development Environments**
 
-Portman automatically manages port allocations across multiple git worktrees and development contexts, preventing port conflicts when running Docker services.
+Portman automatically manages port allocations across multiple git worktrees and development contexts, preventing port conflicts when running Docker services. It also tracks named Docker volumes per context so you can see ownership and prune stale state safely.
 
 ## The Problem
 
@@ -19,6 +19,8 @@ Portman provides:
 - **Context-aware** - Automatically detects your project and branch
 - **direnv integration** - Ports are automatically available as environment variables
 - **Docker Compose discovery** - Auto-detects services from `docker-compose.yml`
+- **Tracked Docker volumes** - Records named Compose volumes per context and shows whether they exist in Docker
+- **Safe volume cleanup** - `prune` only deletes volumes that Portman can prove it owns
 - **Zero configuration** - Works out of the box
 
 ## Installation
@@ -62,13 +64,13 @@ portman get postgres
 
 ### 2. Auto-discovery from docker-compose.yml
 
-If you have a `docker-compose.yml` file, Portman can automatically discover and book ports for all services:
+If you have a `docker-compose.yml` file, Portman can automatically discover and book ports for all services. During the same pass it also records named Docker volumes for the current context:
 
 ```bash
 portman book --auto
 ```
 
-This scans your `docker-compose.yml` and allocates ports for each service.
+This scans your `docker-compose.yml`, allocates ports for each service, and tracks any named volumes it finds.
 
 For custom compose file names:
 
@@ -130,11 +132,19 @@ services:
     image: postgres:15
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  redis_data:
 ```
 
 Then in your `.envrc`:
@@ -182,6 +192,8 @@ portman book redis
 portman book mongodb
 ```
 
+Named volumes are tracked with deterministic Docker names using the format `portman_<context_hash>_<compose_volume_key>`. Portman does not create or rewrite volumes in Compose for you in this version; it records them and uses the metadata for visibility and safe cleanup.
+
 ### List All Allocations
 
 See all port allocations across all contexts:
@@ -193,7 +205,13 @@ portman list
 See allocations for the current context only:
 
 ```bash
-portman list --current
+portman status
+```
+
+See live port status and tracked volumes across all contexts:
+
+```bash
+portman status --all --live
 ```
 
 ### Clean Up
@@ -210,17 +228,19 @@ Release all ports for the current context:
 portman release --all
 ```
 
-Remove allocations for deleted worktrees:
+Remove allocations and tracked Portman-owned volumes for deleted worktrees:
 
 ```bash
 portman prune
 ```
 
-Remove stale allocations (not accessed in 30 days):
+Remove stale allocations and tracked volume records (not accessed in 30 days):
 
 ```bash
 portman prune --stale 30
 ```
+
+If Docker is unavailable, Portman reports skipped volume deletions and leaves those tracked rows in place.
 
 ## Commands Reference
 

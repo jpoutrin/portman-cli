@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 from portman.cli import app
 from portman.context import Context
 
-
 runner = CliRunner()
 
 

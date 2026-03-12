@@ -51,7 +51,8 @@ def prune(
 
     if result.removed_tracked_volumes:
         console.print(
-            f"[yellow]Tracked volume records to remove: {len(result.removed_tracked_volumes)}[/yellow]"
+            f"[yellow]Tracked volume records to remove: "
+            f"{len(result.removed_tracked_volumes)}[/yellow]"
         )
         for volume in result.removed_tracked_volumes:
             console.print(
@@ -60,12 +61,16 @@ def prune(
             )
 
     if result.removed_docker_volumes:
-        console.print(f"[yellow]Docker volumes to delete: {len(result.removed_docker_volumes)}[/yellow]")
+        console.print(
+            f"[yellow]Docker volumes to delete: {len(result.removed_docker_volumes)}[/yellow]"
+        )
         for docker_volume in result.removed_docker_volumes:
             console.print(f"  - {docker_volume}")
 
     if result.skipped_tracked_volumes:
-        console.print(f"[yellow]Skipped volume candidates: {len(result.skipped_tracked_volumes)}[/yellow]")
+        console.print(
+            f"[yellow]Skipped volume candidates: {len(result.skipped_tracked_volumes)}[/yellow]"
+        )
         for message in result.skipped_tracked_volumes:
             console.print(f"  - {message}")
 

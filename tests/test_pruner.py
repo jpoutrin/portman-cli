@@ -1,6 +1,7 @@
 """Tests for pruner module."""
 
 from portman.pruner import Pruner
+from portman.system import DockerInspector
 
 
 def test_prune_removes_orphaned(mock_db, temp_dir):
@@ -145,7 +146,7 @@ def test_prune_multiple_allocations(mock_db, temp_dir):
     assert result.kept[0]["context_hash"] == "valid1"
 
 
-class FakeDockerInspector:
+class FakeDockerInspector(DockerInspector):
     """Minimal Docker inspector stub for prune tests."""
 
     def __init__(self, *, available=True, existing=None, removable=None):

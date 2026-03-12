@@ -43,7 +43,8 @@ def status(
         listening_ports = scanner.get_listening_ports()
 
     if allocations:
-        allocation_table = Table(title="Port Allocations" if all else "Current Context Port Allocations")
+        title = "Port Allocations" if all else "Current Context Port Allocations"
+        allocation_table = Table(title=title)
         if all:
             allocation_table.add_column("Context", style="cyan")
             allocation_table.add_column("Label", style="blue")

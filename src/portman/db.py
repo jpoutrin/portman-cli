@@ -8,7 +8,6 @@ from typing import Any
 
 import platformdirs
 
-
 SCHEMA_VERSION = 2
 
 
